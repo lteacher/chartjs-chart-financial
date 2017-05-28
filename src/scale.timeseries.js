@@ -86,30 +86,31 @@ module.exports = function (Chart) {
 		}
 	};
 
-	function parseTime(axis, label) {
+	// Parses time to a moment object
+	function parseTime(axis, time) {
 		var timeOpts = axis.options.time;
 		if (typeof timeOpts.parser === 'string') {
-			return moment(label, timeOpts.parser);
+			return moment(time, timeOpts.parser);
 		}
 		if (typeof timeOpts.parser === 'function') {
-			return timeOpts.parser(label);
+			return timeOpts.parser(time);
 		}
-		if (typeof label.getMonth === 'function' || typeof label === 'number') {
+		if (typeof time.getMonth === 'function' || typeof time === 'number') {
 			// Date objects
-			return moment(label);
+			return moment(time);
 		}
-		if (label.isValid && label.isValid()) {
+		if (time._isAMomentObject) {
 			// Moment support
-			return label;
+			return time;
 		}
 		var format = timeOpts.format;
 		if (typeof format !== 'string' && format.call) {
 			// Custom parsing (return an instance of moment)
 			console.warn('options.time.format is deprecated and replaced by options.time.parser.');
-			return format(label);
+			return format(time);
 		}
 		// Moment format parsing
-		return moment(label, format);
+		return moment(time, format);
 	}
 
 	/**
@@ -228,73 +229,108 @@ module.exports = function (Chart) {
 
 	var DatasetScale = Chart.Scale.extend({
 
-		/**
-		* Internal function to get the correct labels. If data.xLabels or data.yLabels are defined, use those
-		* else fall back to data.labels
-		* @private
-		*/
-		getLabels: function() {
-			var maxLength = 0;
-			helpers.each(this.chart.data.datasets, function(dataset, datasetIndex) {
-				if (maxLength === 0) {
-					maxLength = dataset.data.length;
-				} else if (dataset.data.length > maxLength) {
-					maxLength = dataset.data.length;
-				}
-			});
+		// As it is the first hook, use this to set some consistently needed vars
+		// In here we set the formatted labels against the parsed dates and map
+		// them to their ISO8601 dates
+		beforeSetDimensions: function() {
+			// TODO: Actually have no idea what this is for? Seems to likely create a
+			// bug for cases where numerous datasets exist with some length larger than
+			// datasets[0] as that is hard coded later? Commenting out for now then...
+			// var maxLength = 0;
+			// helpers.each(this.chart.data.datasets, function(dataset, datasetIndex) {
+			// 	if (maxLength === 0) {
+			// 		maxLength = dataset.data.length;
+			// 	} else if (dataset.data.length > maxLength) {
+			// 		maxLength = dataset.data.length;
+			// 	}
+			// });
 
-			var labels = [];
-			for (var i = 0; i < maxLength; i++) {
-				var labelValue = parseTime(this, this.chart.data.datasets[0].data[i].t).format(this.options.time.format);
-				labels.push(labelValue);
+			var arr = this.chart.data.datasets[0].data;
+
+			this.timeSeries = { values: [], labels: [] };
+
+			// For each time entry parse the time to its label and value representations
+			for (var i = 0; i < arr.length; i++) {
+				var dateTime = parseTime(this, arr[i].t);
+
+				this.timeSeries.values.push(dateTime.valueOf());
+
+				// TODO: This is not right?
+				this.timeSeries.labels.push(dateTime.format(this.displayFormat));
 			}
-
-			return labels;
 		},
+
+
+		// /**
+		// * Internal function to get the correct labels. If data.xLabels or data.yLabels are defined, use those
+		// * else fall back to data.labels
+		// * @private
+		// */
+		// getLabels: function() {
+		// 	var maxLength = 0;
+		// 	helpers.each(this.chart.data.datasets, function(dataset, datasetIndex) {
+		// 		if (maxLength === 0) {
+		// 			maxLength = dataset.data.length;
+		// 		} else if (dataset.data.length > maxLength) {
+		// 			maxLength = dataset.data.length;
+		// 		}
+		// 	});
+		//
+		// 	var labels = [];
+		// 	for (var i = 0; i < maxLength; i++) {
+		// 		var labelValue = parseTime(this, this.chart.data.datasets[0].data[i].t).format(this.options.time.format);
+		// 		labels.push(labelValue);
+		// 	}
+		//
+		// 	return labels;
+		// },
 
 		// TODO(benmcann): this is copied from scale.time.js with modifications
 		determineDataLimits: function() {
 			var me = this;
 
-			var timeOpts = me.options.time;
+			var timeValues = this.timeSeries.values;
 
-			var labels = me.getLabels();
 			me.minIndex = 0;
-			me.maxIndex = labels.length - 1;
+			me.maxIndex = timeValues.length - 1;
 			var findIndex;
 
 			if (me.options.ticks.min !== undefined) {
 				// user specified min value
-				findIndex = helpers.indexOf(labels, me.options.ticks.min);
+				var userMin = parseTime(this, me.options.ticks.min).valueOf();
+				findIndex = helpers.indexOf(timeValues, userMin);
 				me.minIndex = findIndex !== -1 ? findIndex : me.minIndex;
 			}
 
 			if (me.options.ticks.max !== undefined) {
 				// user specified max value
-				findIndex = helpers.indexOf(labels, me.options.ticks.max);
+				var userMax = parseTime(this, me.options.ticks.max).valueOf();
+				findIndex = helpers.indexOf(timeValues, userMax);
 				me.maxIndex = findIndex !== -1 ? findIndex : me.maxIndex;
 			}
 
-			me.min = moment(labels[me.minIndex]);
-			me.max = moment(labels[me.maxIndex]);
+			me.min = moment(timeValues[me.minIndex]);
+			me.max = moment(timeValues[me.maxIndex]);
 		},
 
 		buildTicks: function() {
 			var me = this;
 			var timeOpts = me.options.time;
 
-			var labels = me.getLabels();
+			// TODO: This appears to be unused
+			// var labels = me.getLabels();
 			// If we are viewing some subset of labels, slice the original array
-			labels = (me.minIndex === 0 && me.maxIndex === labels.length - 1) ? labels : labels.slice(me.minIndex, me.maxIndex + 1);
-//			var minTimestamp = labels[0];
-//			var maxTimestamp = labels[labels.length - 1];
+			// labels = (me.minIndex === 0 && me.maxIndex === labels.length - 1) ? labels : labels.slice(me.minIndex, me.maxIndex + 1);
 
 			var minTimestamp;
 			var maxTimestamp;
-//			var dataMin = me.dataMin;
-//			var dataMax = me.dataMax;
-			var dataMin = me.min;
-			var dataMax = me.max;
+
+			// TODO: Note this is useless if the labels were transformed to moment objects
+			// that are not valid dates. Essentially using the labels themselves is not going
+			// to work as they may have destroyed the time granularity. Requires refactor and resolution
+			var dataMin = me.min.valueOf() || me.min;
+			var dataMax = me.max.valueOf() || me.max;
+
 
 			if (timeOpts.min) {
 				var minMoment = parseTime(me, timeOpts.min);
@@ -321,8 +357,8 @@ module.exports = function (Chart) {
 				unit: unit,
 				isoWeekday: timeOpts.isoWeekday
 			}, {
-				min: dataMin,
-				max: dataMax
+				min: me.min,
+				max: me.max
 			});
 
 			// Ensure that ticks are only drawn from set of datapoints
@@ -358,21 +394,22 @@ module.exports = function (Chart) {
 		// Get tooltip label
 		getLabelForIndex: function(index, datasetIndex) {
 			var me = this;
-			var label = me.chart.data.labels && index < me.chart.data.labels.length ? me.chart.data.labels[index] : '';
-			var value = me.chart.data.datasets[datasetIndex].data[index];
+			// var label = me.chart.data.labels && index < me.chart.data.labels.length ? me.chart.data.labels[index] : '';
+			// var value = me.chart.data.datasets[datasetIndex].data[index];
 
-			if (value !== null && typeof value === 'object') {
-				label = value.t;
-			}
+			// if (value !== null && typeof value === 'object') {
+			// 	label = value.t;
+			// }
+			//
+			// // Format nicely
+			// if (me.options.time.tooltipFormat) {
+			// 	label = parseTime(me, label).format(me.options.time.tooltipFormat);
+			// } else {
+			// 	label = parseTime(me, label).format(this.displayFormat);
+			// }
 
-			// Format nicely
-			if (me.options.time.tooltipFormat) {
-				label = parseTime(me, label).format(me.options.time.tooltipFormat);
-			} else {
-				label = parseTime(me, label).format(this.displayFormat);
-			}
-
-			return label;
+			// TODO: This is broken
+			return me.timeSeries.labels[index];
 		},
 
 		// TODO(benmcann): this is copied directly from scale.time.js
@@ -387,6 +424,7 @@ module.exports = function (Chart) {
 			}
 			return formattedTick;
 		},
+
 		// TODO(benmcann): this is copied directly from scale.time.js
 		convertTicksToLabels: function() {
 			var me = this;
@@ -395,6 +433,7 @@ module.exports = function (Chart) {
 				return moment(tick);
 			}).map(me.tickFormatFunction, me);
 		},
+
 		// TODO(benmcann): this is copied directly from scale.category.js
 		// Used to get data value locations.  Value can either be an index or a numerical value
 		getPixelForValue: function(value, index, datasetIndex, includeOffset) {
@@ -409,9 +448,9 @@ module.exports = function (Chart) {
 				valueCategory = me.isHorizontal() ? value.x : value.y;
 			}
 			if (valueCategory !== undefined || (value !== undefined && isNaN(index))) {
-				var labels = me.getLabels();
-				value = valueCategory || value;
-				var idx = labels.indexOf(value);
+				// var labels = me.timeSeries.labels;
+				// value = valueCategory || value;
+				var idx = this.timeSeries.values.indexOf(value);
 				index = idx !== -1 ? idx : index;
 			}
 
@@ -434,21 +473,26 @@ module.exports = function (Chart) {
 
 			return me.top + Math.round(heightOffset);
 		},
+
 		getPixelForTick: function(index, includeOffset) {
 			var me = this;
-			var tick = parseTime(me, this.ticks[index]).valueOf();
-			// TODO: don't hardcode datasetIndex
-			var datasetIndex = 0;
-			var data = me.chart.chart.config.data.datasets[datasetIndex].data;
-			var dataIndex = -1;
-			for (var i = 0; i < data.length; i++) {
-				if (data[i].t === tick) {
-					dataIndex = i;
-					break;
-				}
-			}
 
-            var scale = me;
+			// The ticks are already in label so we need to use the raw times
+			var tick = me.ticksAsTimestamps[index];
+
+			// // TODO: don't hardcode datasetIndex
+			var datasetIndex = 0;
+			var dataIndex = helpers.indexOf(me.timeSeries.values, tick);
+			// var data = me.chart.chart.config.data.datasets[datasetIndex].data;
+			// var dataIndex = -1;
+			// for (var i = 0; i < data.length; i++) {
+			// 	if (data[i].t === tick) {
+			// 		dataIndex = i;
+			// 		break;
+			// 	}
+			// }
+
+      var scale = me;
 			var fullSize = scale.isHorizontal() ? scale.width : scale.height;
 			var categorySize = fullSize / me.chart.data.datasets[datasetIndex].data.length;
 			var base = scale.getPixelForValue(null, dataIndex, datasetIndex, false);
